@@ -11,6 +11,7 @@
 #import "AIRGoogleMapCallout.h"
 #import "RCTImageLoader.h"
 #import "RCTUtils.h"
+#import "DummyView.h"
 
 CGRect unionRect(CGRect a, CGRect b) {
   return CGRectMake(
@@ -27,6 +28,7 @@ CGRect unionRect(CGRect a, CGRect b) {
 @implementation AIRGoogleMapMarker {
   RCTImageLoaderCancellationBlock _reloadImageCancellationBlock;
   __weak UIImageView *_iconImageView;
+  UIView *_iconView;
 }
 
 - (instancetype)init
@@ -38,12 +40,16 @@ CGRect unionRect(CGRect a, CGRect b) {
   return self;
 }
 
+- (void)layoutSubviews {
+  if (_iconView) [_iconView sizeToFit];
+}
+
 - (id)eventFromMarker:(AIRGMSMarker*)marker {
 
   CLLocationCoordinate2D coordinate = marker.position;
   CGPoint position = [self.realMarker.map.projection pointForCoordinate:coordinate];
 
-return @{
+  return @{
          @"id": marker.identifier ?: @"unknown",
          @"position": @{
              @"x": @(position.x),
@@ -56,27 +62,36 @@ return @{
          };
 }
 
+- (void)iconViewInsertSubview:(UIView*)subview atIndex:(NSInteger)atIndex {
+  if (!_realMarker.iconView) {
+    _iconView = [[UIView alloc] init];
+    _realMarker.iconView = _iconView;
+  }
+  [_iconView insertSubview:subview atIndex:atIndex];
+
+  // TODO(gil): This is a very naive way of managing the frame.
+  [_iconView setFrame:unionRect(_iconView.frame, subview.frame)];
+}
+
 - (void)insertReactSubview:(id<RCTComponent>)subview atIndex:(NSInteger)atIndex {
   if ([subview isKindOfClass:[AIRGoogleMapCallout class]]) {
     self.calloutView = (AIRGoogleMapCallout *)subview;
-  } else {
-    // Custom UIView Marker
-    // NOTE: Originally I tried creating a new UIView here to encapsulate subview,
-    //       but it would not sizeToFit properly. Not sure why.
-    [super insertReactSubview:(UIView*)subview atIndex:atIndex];
-    [self sizeToFit];
-
-    // TODO: how to handle this circular reference properly?
-    _realMarker.iconView = self;
+  } else { // a child view of the marker
+    [self iconViewInsertSubview:(UIView*)subview atIndex:atIndex];
   }
+  DummyView *dummySubview = [[DummyView alloc] initWithView:(UIView *)subview];
+  [super insertReactSubview:(UIView*)dummySubview atIndex:atIndex];
 }
 
-- (void)removeReactSubview:(id<RCTComponent>)subview {
+- (void)removeReactSubview:(id<RCTComponent>)dummySubview {
+  UIView* subview = ((DummyView*)dummySubview).view;
+
   if ([subview isKindOfClass:[AIRGoogleMapCallout class]]) {
     self.calloutView = nil;
   } else {
-    [super removeReactSubview:(UIView*)subview];
+    [(UIView*)subview removeFromSuperview];
   }
+  [super removeReactSubview:(UIView*)dummySubview];
 }
 
 - (void)showCalloutView {
@@ -151,7 +166,6 @@ return @{
 
 - (void)setImageSrc:(NSString *)imageSrc
 {
-
   _imageSrc = imageSrc;
 
   if (_reloadImageCancellationBlock) {
@@ -172,11 +186,14 @@ return @{
                                                                  }
                                                                  dispatch_async(dispatch_get_main_queue(), ^{
 
-                                                                   if (_iconImageView) {
-                                                                     // TODO: doesn't work because image is blank (WHY??)
-                                                                     [_iconImageView setImage:image];
-                                                                     return;
-                                                                   }
+                                                                   // TODO(gil): This way allows different image sizes
+                                                                   if (_iconImageView) [_iconImageView removeFromSuperview];
+
+                                                                   // ... but this way is more efficient?
+//                                                                   if (_iconImageView) {
+//                                                                     [_iconImageView setImage:image];
+//                                                                     return;
+//                                                                   }
 
                                                                    UIImageView *imageView = [[UIImageView alloc] initWithImage:image];
 
@@ -197,9 +214,7 @@ return @{
                                                                    [self setFrame:selfBounds];
 
                                                                    _iconImageView = imageView;
-
-                                                                   [super insertSubview:imageView atIndex:0];
-                                                                   _realMarker.iconView = self;
+                                                                   [self iconViewInsertSubview:imageView atIndex:0];
 
                                                                    // TODO: This could be a prop
                                                                    //_realMarker.groundAnchor = CGPointMake(0.75, 1);
